@@ -1,4 +1,168 @@
 close all;
 clear all;
+% This test filter will analyze data from 201804201340-Boomer-Treadmill_Obstacle_Treats
+% Neural Data and kinematics came preprocessed in TrialData.mat
+% -Nick 1/2/2020
+
+%% Load data 
+load('D:\Borton Lab\Blackrock\NS5_files\201804201340-Boomer-Treadmill_Obstacle_Treats\TrialData.mat')
+
+%% Initialize useful variables
+%Store all data in cell array for quick indexing
+trial_struct = {WalkTrials, ObstacleTrials, WalkObstacleTrials};
+
+% List of all kinematic features; 
+% (1:10) include marker position wrt origin;
+% (19:21) include joint angles
+kinematic_features = fieldnames(ObstacleTrials(1).Kinematics); 
+
+%Number and length of trials for each subset of data
+num_trials = {};
+length_trials = {};
+for subset = 1:length(trial_struct)
+    num_trials{subset} = length(trial_struct{subset});
+    
+    subset_trial_length = [];
+    for trial = 1:length(trial_struct{subset})
+        subset_trial_length(trial) = length(trial_struct{subset}(trial).Neural(1).firingRateSmoothed);
+        
+    end
+    
+    length_trial{subset} = subset_trial_length;
+    
+end
+
+%Number of neurons for each subset (common to all subsets)
+num_neurons = length(trial_struct{1}(1).Neural);
 
 
+
+
+%% Plot raw kinematics and neural data
+kine_plot = true;
+if kine_plot
+    plot_subset = 1; %Choose Walk (1), Obstacle (2), or WalkObstacle (3) Trials
+    feature_plot_idx = [1:10]; %Index of features to plot
+
+    figure %Iterate over trials and plot selected features
+    subplot_idx = 1;
+    for f = feature_plot_idx
+        subplot(length(feature_plot_idx), 1, subplot_idx)
+        hold on
+%         title(kinematic_features{f})
+        for t = 1:num_trials{plot_subset}
+            kine_data = trial_struct{plot_subset}(t).Kinematics.(kinematic_features{f});
+            plot(kine_data)
+                  
+        end
+        xlim([1 150])
+        subplot_idx = subplot_idx + 1;
+    end
+end
+
+neural_plot = true;
+if neural_plot
+    
+end
+%% Cross Validation Setup
+%Generate new crossval indeces
+% cv_indeces = {};
+% for i = 1:length(num_trials)
+%     cv_indeces{i} = crossvalind('Kfold',num_trials{i},5); 
+% end
+% save('cv_indeces')
+
+%Load old crossval indeces
+load('cv_indeces.mat')
+
+%% Select kinematic features
+% decode_features = [1:10,19:21]; %All features
+decode_features = [5,6,7];
+
+%% Train and test decoder on subset
+decode_subset = 1;
+k_folds = max(cv_indeces{decode_subset});
+
+%Iterate over folds
+for cv_idx = 1:k_folds
+    % Create logical indeces for train and test sets
+    test = (cv_indeces{decode_subset} == cv_idx); 
+    train = ~test;
+    
+    % Filter matrices into train and test sets
+    neural_data_train = [];
+    neural_data_test = [];
+    kinematic_train = [];
+    kinematic_test = [];
+    
+    for trial = 1:num_trials{decode_subset}
+        neural_trial_struct = trial_struct{decode_subset}(trial).Neural;
+        kine_trial_struct = trial_struct{decode_subset}(trial).Kinematics;
+
+        %Check if current trial is part of the train set
+        if train(trial) == 1
+            %Fill in neural matrix with data from struct
+            neural_train_trial = []; 
+
+            for neuron = 1:length(neural_trial_struct)
+                neural_train_trial(neuron,:) = neural_trial_struct(neuron).firingRateSmoothed;
+%                 neural_train_trial(neuron,:) = neural_trial_struct(neuron).firingRate; % Use unsmoothed data   
+            end
+
+            %Fill in kinematic matrix with data from struct
+            kine_train_trial = [];
+
+            for f = 1:length(decode_features)
+                kine_train_trial(f,:) = kine_trial_struct.(kinematic_features{decode_features(f)});
+            end
+            
+            %Concatenate train matrices over trials
+            neural_data_train = horzcat(neural_data_train, neural_train_trial);
+            kinematic_train = horzcat(kinematic_train, kine_train_trial);
+            
+            
+        %Check if current trial is part of the test set
+        else
+            %Fill in neural matrix with data from struct
+            neural_test_trial = []; 
+
+            for neuron = 1:length(neural_trial_struct)
+                neural_test_trial(neuron,:) = neural_trial_struct(neuron).firingRateSmoothed;
+%                 neural_train_trial(neuron,:) = neural_trial_struct(neuron).firingRate; % Use unsmoothed data   
+            end
+
+            %Fill in kinematic matrix with data from struct
+            kine_test_trial = [];
+
+            for f = 1:length(decode_features)
+                kine_test_trial(f,:) = kine_trial_struct.(kinematic_features{decode_features(f)});
+            end
+            
+            %Concatenate train matrices over trials
+            neural_data_test = horzcat(neural_data_test, neural_test_trial);
+            kinematic_test = horzcat(kinematic_test, kine_test_trial);
+        end  
+        
+    end
+    
+    % Compute decoder parameters and run on test set
+    neural_data_train = neural_data_train';
+    neural_data_test = neural_data_test';
+    kinematic_train = kinematic_train';
+    kinematic_test = kinematic_test';
+    
+    decode_param = neural_data_train\kinematic_train;
+    pred = neural_data_test * decode_param;
+    
+    %Plot prediction against ground truth and compute error
+    figure
+    for f = 1:size(pred,2)
+        subplot(size(pred,2),1,f)
+        hold on
+        plot(pred(:,f),'b', 'LineWidth',2)
+        plot(kinematic_test(:,f),'r', 'LineWidth',2)
+        title([kinematic_features{decode_features(f)}, '; r = ', num2str(corr(pred(:,f),kinematic_test(:,f)))])
+        
+    end
+
+end
